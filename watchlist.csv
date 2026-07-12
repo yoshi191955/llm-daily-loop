@@ -1,0 +1,53 @@
+ticker,name,sector,corr_bucket,live_eligible,notes
+NVDA,NVIDIA,Semiconductors,semis,Y,AI半導体の主力。semisバケットは相互相関が非常に高い
+AMD,Advanced Micro Devices,Semiconductors,semis,Y,semis
+AVGO,Broadcom,Semiconductors,semis,Y,semis
+MU,Micron,Semiconductors,semis,Y,メモリ市況に敏感
+TSM,Taiwan Semiconductor,Semiconductors,semis,Y,地政学リスクあり
+AAPL,Apple,Mega-cap Platform,megacap,Y,巨大プラットフォーム。指数と高相関
+MSFT,Microsoft,Mega-cap Platform,megacap,Y,クラウド+AI
+GOOGL,Alphabet,Mega-cap Platform,megacap,Y,RSメガキャップ
+AMZN,Amazon,Mega-cap Platform,megacap,Y,EC+AWS
+META,Meta Platforms,Mega-cap Platform,megacap,Y,広告+AI
+ORCL,Oracle,Software,software,Y,クラウド移行
+CRM,Salesforce,Software,software,Y,SaaS
+NOW,ServiceNow,Software,software,Y,SaaS
+SNOW,Snowflake,Software,software,Y,データクラウド。高ボラ
+DDOG,Datadog,Software,software,Y,監視SaaS
+ADBE,Adobe,Software,software,Y,クリエイティブ+AI
+CRWD,CrowdStrike,Cybersecurity,cyber,Y,サイバー
+PANW,Palo Alto Networks,Cybersecurity,cyber,Y,サイバー
+ZS,Zscaler,Cybersecurity,cyber,Y,サイバー。高ボラ
+V,Visa,Fintech/Payments,payments,Y,決済インフラ(ディフェンシブ寄り)
+MA,Mastercard,Fintech/Payments,payments,Y,決済インフラ
+PYPL,PayPal,Fintech/Payments,payments,Y,フィンテック
+SQ,Block,Fintech/Payments,payments,Y,フィンテック。高ボラ
+SHOP,Shopify,Fintech/Payments,payments,Y,EC基盤。高ボラ
+TSLA,Tesla,EV/Clean Energy,ev_clean,Y,EV。単独材料多く高ボラ
+RIVN,Rivian,EV/Clean Energy,ev_clean,Y,EV小型。非常に高ボラ
+ENPH,Enphase,EV/Clean Energy,ev_clean,Y,太陽光。金利敏感
+FSLR,First Solar,EV/Clean Energy,ev_clean,Y,太陽光
+LLY,Eli Lilly,Healthcare Growth,healthcare,Y,GLP-1成長。growth系と低相関になりやすい
+ISRG,Intuitive Surgical,Healthcare Growth,healthcare,Y,手術ロボット
+VRTX,Vertex Pharma,Healthcare Growth,healthcare,Y,バイオ
+REGN,Regeneron,Healthcare Growth,healthcare,Y,バイオ
+DXCM,Dexcom,Healthcare Growth,healthcare,Y,医療機器
+CAT,Caterpillar,Industrials/Defense,industrials,Y,景気敏感
+DE,Deere,Industrials/Defense,industrials,Y,農機
+GE,GE Aerospace,Industrials/Defense,industrials,Y,航空
+LMT,Lockheed Martin,Industrials/Defense,industrials,Y,防衛(地政学ヘッジ)
+XOM,Exxon Mobil,Energy,energy,Y,エネルギー。oil_supply_shock材料
+CVX,Chevron,Energy,energy,Y,エネルギー
+SLB,SLB (Schlumberger),Energy,energy,Y,油田サービス
+COST,Costco,Consumer Growth,consumer,Y,ディフェンシブ成長
+NKE,Nike,Consumer Growth,consumer,Y,消費
+SBUX,Starbucks,Consumer Growth,consumer,Y,消費
+CMG,Chipotle,Consumer Growth,consumer,Y,消費
+HD,Home Depot,Consumer Growth,consumer,Y,住宅関連消費
+NFLX,Netflix,Comm/Media,media,Y,ストリーミング
+DIS,Walt Disney,Comm/Media,media,Y,メディア
+TMUS,T-Mobile US,Comm/Media,media,Y,通信(ディフェンシブ寄り)
+JPM,JPMorgan,Financials,financials,Y,銀行。金利敏感
+GS,Goldman Sachs,Financials,financials,Y,投資銀行
+NEM,Newmont,Materials/Gold,diversifier,Y,金鉱。growthと低相関の分散材
+FCX,Freeport-McMoRan,Materials/Copper,diversifier,Y,銅。景気/中国敏感

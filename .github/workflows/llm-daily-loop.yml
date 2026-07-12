@@ -1,0 +1,45 @@
+name: llm-daily-loop
+
+# 米国市場の【寄り付き前】に1日1回実行（後知恵バイアス防止）。
+#   12:30 UTC = 08:30 ET(夏) / 07:30 ET(冬)  … いずれも 09:30 ET の寄り付き前
+# スクリプト側でも「平日 かつ 寄り付き前 かつ 当日の足が未生成」を再確認する。
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: llm-daily-loop
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run LLM daily loop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: claude-sonnet-4-6
+        run: python llm_daily_loop.py
+
+      - name: Commit log
+        run: |
+          git config user.name  "llm-loop-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add docs/predictions_log.csv
+          if git diff --staged --quiet; then
+            echo "no changes"
+          else
+            git commit -m "llm log update: $(date -u +%FT%TZ)"
+            git push
+          fi

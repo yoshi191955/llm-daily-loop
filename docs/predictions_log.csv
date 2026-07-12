@@ -1,0 +1,1 @@
+pred_id,predict_date_jst,session_date,market,ticker,corr_bucket,strategy_tag,lean,score,direction,entry_ref,target_pct,stop_pct,horizon,confidence,catalyst_type,regime,thesis,status,actual_open,actual_close,return_pct,net_return_pct,hit,exit_reason,notes
