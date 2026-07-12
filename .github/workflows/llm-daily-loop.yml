@@ -6,7 +6,12 @@ name: llm-daily-loop
 on:
   schedule:
     - cron: "30 12 * * 1-5"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: "スモークテスト（APIキー確認のみ・ログ非更新）"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -30,7 +35,12 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           CLAUDE_MODEL: claude-sonnet-4-6
-        run: python llm_daily_loop.py
+        run: |
+          if [ "${{ inputs.smoke }}" = "true" ]; then
+            python llm_daily_loop.py --smoke
+          else
+            python llm_daily_loop.py
+          fi
 
       - name: Commit log
         run: |

@@ -226,7 +226,33 @@ def score_rows(rows, daily):
 
 # ─────────────────────────── メイン ───────────────────────────
 
+def smoke_test():
+    """APIキー・モデル名・JSONパースだけを検証する。ログには一切書き込まない。"""
+    wl = load_watchlist()[:3]
+    tickers = [t for t, _ in wl]
+    print(f"[smoke] 対象: {tickers}（書き込みは行いません）")
+    daily = fetch_daily(tickers)
+    print(f"[smoke] 日足取得: {len(daily)}/{len(tickers)} 銘柄")
+    ctx = build_context(wl, daily)
+    if not ctx:
+        print("[smoke] NG: コンテキストを構築できませんでした")
+        sys.exit(1)
+    preds = predict(ctx, dt.date.today().isoformat())
+    if not preds:
+        print("[smoke] NG: 予測が空です（JSONパース失敗の可能性）")
+        sys.exit(1)
+    print(f"[smoke] OK: Claude API から {len(preds)} 件の予測を取得")
+    for p in preds:
+        print(f"   {p.get('ticker'):<6} lean={p.get('lean'):<4} score={p.get('score')} "
+              f"direction={p.get('direction'):<4} catalyst={p.get('catalyst_type')}")
+        print(f"          thesis: {str(p.get('thesis',''))[:90]}")
+    print("[smoke] ✓ APIキー・モデル・JSON出力すべて正常。ログは未変更。")
+
+
 def main():
+    if "--smoke" in sys.argv:
+        smoke_test()
+        return
     now = dt.datetime.now(dt.timezone.utc)
     et = now.astimezone(ET)
     session = et.date().isoformat()
