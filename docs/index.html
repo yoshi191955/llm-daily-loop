@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM日足ループ — 監視ダッシュボード</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+<style>
+:root{color-scheme:light}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;background:#f6f7f9;color:#1c2430;font-size:14px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding:18px}
+h1{font-size:20px;margin:0 0 2px}
+h2{font-size:15px;margin:24px 0 8px;border-left:4px solid #3b6cf6;padding-left:8px}
+h3{font-size:13px;margin:14px 0 6px;color:#43506b}
+.sub{color:#5b6675;font-size:12px}
+.tabs{display:flex;gap:6px;margin:14px 0}
+.tab{padding:7px 16px;border:1px solid #e4e8ee;border-radius:8px;background:#fff;cursor:pointer;font-weight:600;font-size:13px}
+.tab.on{background:#3b6cf6;color:#fff;border-color:#3b6cf6}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px}
+.card{background:#fff;border:1px solid #e4e8ee;border-radius:10px;padding:12px}
+.card .k{font-size:11px;color:#6b7684}
+.card .v{font-size:21px;font-weight:700;margin-top:3px}
+.card .n{font-size:11px;color:#8a94a2;margin-top:2px}
+.pos{color:#12855b}.neg{color:#c0392b}.warnc{color:#b7791f}
+.alert{border-radius:10px;padding:11px 13px;margin:8px 0;font-size:13px;border:1px solid}
+.a-warn{background:#fff8e6;border-color:#f0d089;color:#7a5b12}
+.a-bad{background:#fdecea;border-color:#f0b3ab;color:#8a2b1f}
+.a-ok{background:#e9f7ef;border-color:#a6ddbf;color:#116843}
+.a-info{background:#eef3fe;border-color:#bcd0f7;color:#274a9e}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid #e4e8ee;border-radius:10px;overflow:hidden}
+th,td{padding:7px 9px;text-align:right;border-bottom:1px solid #eef1f5;font-variant-numeric:tabular-nums}
+th{background:#f0f3f7;font-size:12px;color:#43506b;cursor:pointer;user-select:none}
+th:first-child,td:first-child{text-align:left}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chartbox{background:#fff;border:1px solid #e4e8ee;border-radius:10px;padding:10px;height:240px}
+.foot{color:#8a94a2;font-size:11px;margin-top:22px}
+code{background:#eef1f5;padding:1px 4px;border-radius:4px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>LLM日足ループ — 監視ダッシュボード</h1>
+  <div class="sub" id="src">読み込み中…</div>
+  <div class="tabs" id="tabs"></div>
+  <div id="app"></div>
+  <div class="foot">
+    ※ 検証用の名目（ペーパー）計算。発注は行っていません。投資助言ではありません。<br>
+    コスト後実利益 <code>net_return_pct</code>（往復0.5%＋利益25%課税）の符号を「本当の勝ち」として評価。
+    機械的モメンタムのベースラインは <b>的中50.4%＝コイン投げ</b>（12,492トレードで実測）。
+  </div>
+</div>
+<script>
+const CONF={3:0.067,2:0.04,1:0};
+const MIN_TRADES=8;
+let DATA=[], CUR="1d", chart=null;
+
+function num(x){if(x==null)return null;const s=String(x).trim().replace('+','');if(!s)return null;const v=parseFloat(s);return isNaN(v)?null:v;}
+function costNet(r){const a=r-0.5;return a>0?a*0.75:a;}
+function mean(a){return a.length?a.reduce((x,y)=>x+y,0)/a.length:0;}
+function sd(a){if(a.length<2)return 0;const m=mean(a);return Math.sqrt(a.reduce((s,x)=>s+(x-m)*(x-m),0)/(a.length-1));}
+function tstat(a){const s=sd(a);return s?mean(a)/(s/Math.sqrt(a.length)):0;}
+function pct(x,d=2){return (x>=0?'+':'')+x.toFixed(d)+'%';}
+function cls(x){return x>0?'pos':(x<0?'neg':'');}
+function card(k,v,c,n){return `<div class="card"><div class="k">${k}</div><div class="v ${c||''}">${v}</div>${n?`<div class="n">${n}</div>`:''}</div>`;}
+
+function parseCSV(t){const rows=[];let i=0,f='',row=[],q=false;
+ while(i<t.length){const c=t[i];
+  if(q){if(c==='"'){if(t[i+1]==='"'){f+='"';i+=2;continue}q=false;i++;continue}f+=c;i++;continue}
+  if(c==='"'){q=true;i++;continue}
+  if(c===','){row.push(f);f='';i++;continue}
+  if(c==='\r'){i++;continue}
+  if(c==='\n'){row.push(f);rows.push(row);row=[];f='';i++;continue}
+  f+=c;i++}
+ if(f.length||row.length){row.push(f);rows.push(row)}
+ const h=rows.shift();
+ return rows.filter(r=>r.length>1).map(r=>{const o={};h.forEach((k,j)=>o[k.trim()]=r[j]);return o});}
+
+function render(){
+  const rows=DATA.filter(r=>r.horizon===CUR);
+  const tr=rows.filter(r=>(r.direction==='up'||r.direction==='down')&&num(r.net_return_pct)!==null);
+  let h='';
+
+  // lean / score 監視（初期の最重要チェック）
+  const leans=DATA.filter(r=>r.horizon===CUR&&r.lean);
+  const nUp=leans.filter(r=>r.lean==='up').length, nDn=leans.filter(r=>r.lean==='down').length;
+  const dirs=rows.filter(r=>r.direction==='up'||r.direction==='down').length;
+  const flats=rows.filter(r=>r.direction==='flat').length;
+
+  h+='<h2>予測の健全性（毎日まず見る）</h2><div class="cards">';
+  h+=card('lean 内訳', `${nUp} / ${nDn}`, (nDn===0&&nUp>0)?'neg':'', 'up / down');
+  h+=card('賭けた数(directional)', dirs, '', `見送り flat ${flats}`);
+  h+=card('採点済み', tr.length, '', `horizon=${CUR}`);
+  h+='</div>';
+  if(leans.length&&nDn===0){
+    h+=`<div class="alert a-bad"><b>lean が全て up に偏っています。</b> down群が存在しないため<b>クロスセクション検定が成立しません</b>。プロンプトに「52銘柄の中で相対的に弱い銘柄には down を付ける」旨を追加してください。</div>`;
+  }else if(leans.length){
+    h+=`<div class="alert a-ok">lean は up/down 両方あり。クロスセクション検定が可能です。</div>`;
+  }
+  if(rows.length&&dirs===0){
+    h+=`<div class="alert a-warn"><b>賭けがゼロです。</b> score が全て閾値(0.60)未満の可能性。データが貯まりません。閾値の調整を検討してください。</div>`;
+  }
+
+  if(!tr.length){
+    h+=`<div class="alert a-info">horizon=${CUR} の採点済みトレードはまだありません。${CUR==='3d'?'3日足は満期まで3営業日かかります。':''}</div>`;
+    document.getElementById('app').innerHTML=h;return;
+  }
+
+  // 4階層
+  const net=tr.map(r=>num(r.net_return_pct));
+  const ret=tr.map(r=>num(r.return_pct));
+  const hit=tr.map(r=>String(r.hit).toUpperCase()==='TRUE');
+  const bys={}; tr.forEach(r=>{(bys[r.session_date]=bys[r.session_date]||[]).push(num(r.net_return_pct))});
+  const sm=Object.keys(bys).sort().map(d=>mean(bys[d]));
+  const raw=tr.map(r=>r.direction==='up'?num(r.return_pct):-num(r.return_pct));
+  const au=raw.map(costNet);
+  const edge=mean(net)-mean(au);
+
+  h+='<h2>成績（4階層 — 下ほど厳しい＝信頼できる）</h2>';
+  h+='<h3>1. トレード単位 ※過大評価されがち</h3><div class="cards">';
+  h+=card('方向的中率',(hit.filter(Boolean).length/tr.length*100).toFixed(1)+'%','','baseline 50.4%');
+  h+=card('コスト後プラス率',(net.filter(x=>x>0).length/net.length*100).toFixed(1)+'%');
+  h+=card('純益(平均)',pct(mean(net)),cls(mean(net)));
+  h+=card('t値',tstat(net).toFixed(2),Math.abs(tstat(net))>2?'pos':'warnc');
+  h+='</div>';
+
+  h+='<h3>2. ★セッション単位 — 同日の相関を補正した"本当の"標本</h3><div class="cards">';
+  h+=card('独立セッション',sm.length,sm.length<30?'warnc':'pos','目標30日');
+  h+=card('セッション平均',pct(mean(sm)),cls(mean(sm)));
+  h+=card('t値(セッション)',tstat(sm).toFixed(2),Math.abs(tstat(sm))>2?'pos':'warnc','|t|>2が目安');
+  h+=card('プラスの日',`${sm.filter(x=>x>0).length}/${sm.length}`);
+  h+='</div>';
+  if(sm.length<30) h+=`<div class="alert a-warn">独立セッションが <b>${sm.length}日</b>。判定には <b>30日以上</b> 必要です。それまで結論を出さないこと。</div>`;
+
+  h+='<h3>3. ベータ分離 — 「上げ相場に乗っただけ」を除外</h3><div class="cards">';
+  h+=card('AlwaysUp(常に買い)',pct(mean(au)),cls(mean(au)));
+  h+=card('このシステム',pct(mean(net)),cls(mean(net)));
+  h+=card('付加価値',pct(edge),cls(edge),edge>0?'○ 価値あり':'× 価値なし');
+  const dn=tr.filter(r=>r.direction==='down');
+  if(dn.length){const dh=dn.filter(r=>String(r.hit).toUpperCase()==='TRUE').length;
+    h+=card('down予測',`${dh}/${dn.length}`,'','AlwaysUpでは取れない');}
+  h+='</div>';
+
+  // 4. クロスセクション
+  h+='<h3>4. ★クロスセクション — 市場ベータが設計上ゼロ</h3>';
+  const byd={}; DATA.filter(r=>r.horizon===CUR&&(r.lean==='up'||r.lean==='down')&&num(r.return_pct)!==null)
+    .forEach(r=>{(byd[r.session_date]=byd[r.session_date]||[]).push(r)});
+  const spreads=[];
+  Object.keys(byd).sort().forEach(d=>{
+    const u=byd[d].filter(r=>r.lean==='up').map(r=>num(r.return_pct));
+    const v=byd[d].filter(r=>r.lean==='down').map(r=>num(r.return_pct));
+    if(u.length&&v.length) spreads.push(mean(u)-mean(v));
+  });
+  if(spreads.length){
+    h+='<div class="cards">';
+    h+=card('long-short スプレッド',pct(mean(spreads)),cls(mean(spreads)),'up群 − down群');
+    h+=card('t値',tstat(spreads).toFixed(2),Math.abs(tstat(spreads))>2?'pos':'warnc');
+    h+=card('プラスの日',`${spreads.filter(x=>x>0).length}/${spreads.length}`);
+    h+='</div>';
+    h+=`<div class="alert ${mean(spreads)>0?'a-ok':'a-warn'}">同じ日の中の差なので相場の上下は相殺済み。${mean(spreads)>0?'○ 銘柄選択に実力の兆候':'× 実力を確認できず'}</div>`;
+  } else {
+    h+='<div class="alert a-info">up/down 両方の lean がある日がまだ無く、検定不能です。</div>';
+  }
+
+  // エクイティ + 銘柄別
+  h+='<h2>近似エクイティ曲線（conf連動サイズ・逐次複利）</h2><div class="chartbox"><canvas id="eq"></canvas></div>';
+  const byt={}; tr.forEach(r=>{(byt[r.ticker]=byt[r.ticker]||[]).push(num(r.net_return_pct))});
+  const tk=Object.entries(byt).map(([k,v])=>({t:k,n:v.length,m:mean(v),s:v.reduce((a,b)=>a+b,0)})).sort((a,b)=>b.s-a.s);
+  h+='<h2>銘柄別</h2><table><thead><tr><th>ticker</th><th>n</th><th>net平均</th><th>net合計</th></tr></thead><tbody>';
+  tk.forEach(x=>{h+=`<tr><td>${x.t}</td><td>${x.n}</td><td class="${cls(x.m)}">${pct(x.m)}</td><td class="${cls(x.s)}">${pct(x.s)}</td></tr>`});
+  h+='</tbody></table>';
+
+  document.getElementById('app').innerHTML=h;
+
+  const srt=tr.slice().sort((a,b)=>(a.session_date+a.pred_id).localeCompare(b.session_date+b.pred_id));
+  let bal=1e6; const curve=srt.map(r=>{const cf=CONF[parseInt(num(r.confidence))]||0.04;
+    bal*=(1+cf*num(r.net_return_pct)/100); return {x:r.session_date,y:bal}});
+  const cx=document.getElementById('eq');
+  if(cx){ if(chart)chart.destroy();
+    chart=new Chart(cx,{type:'line',data:{labels:curve.map(p=>p.x),datasets:[{data:curve.map(p=>p.y),
+      borderColor:'#3b6cf6',backgroundColor:'rgba(59,108,246,.08)',fill:true,pointRadius:0,tension:.15,borderWidth:2}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+        scales:{x:{ticks:{maxTicksLimit:8,color:'#8a94a2'},grid:{display:false}},
+                y:{ticks:{color:'#8a94a2',callback:v=>(v/1e6).toFixed(3)+'M'},grid:{color:'#eef1f5'}}}}});
+  }
+}
+
+function tabs(){
+  const t=document.getElementById('tabs');
+  t.innerHTML=['1d','3d'].map(h=>`<div class="tab ${h===CUR?'on':''}" data-h="${h}">horizon ${h}</div>`).join('');
+  t.querySelectorAll('.tab').forEach(el=>el.onclick=()=>{CUR=el.dataset.h;tabs();render()});
+}
+
+fetch('./predictions_log.csv?_='+Date.now()).then(r=>r.text()).then(t=>{
+  DATA=parseCSV(t);
+  const sess=[...new Set(DATA.map(r=>r.session_date).filter(Boolean))];
+  document.getElementById('src').innerHTML=
+    `データ元: predictions_log.csv ・ ${DATA.length} 行 ・ セッション ${sess.length} 日 ・ 更新 ${new Date().toLocaleString('ja-JP')}`;
+  tabs();
+  if(!DATA.length){document.getElementById('app').innerHTML='<div class="alert a-info">まだ予測データがありません。平日 21:30 JST（米国の寄り付き前）に自動生成されます。</div>';return}
+  render();
+}).catch(e=>{document.getElementById('app').innerHTML='<div class="alert a-bad">読み込みエラー: '+e.message+'</div>'});
+</script>
+</body>
+</html>
