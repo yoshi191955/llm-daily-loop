@@ -5,7 +5,7 @@ name: llm-daily-loop
 # スクリプト側でも「平日 かつ 寄り付き前 かつ 当日の足が未生成」を再確認する。
 on:
   schedule:
-    - cron: "30 12 * * 1-5"
+    - cron: "5 8 * * 1-5"
   workflow_dispatch:
     inputs:
       smoke:
