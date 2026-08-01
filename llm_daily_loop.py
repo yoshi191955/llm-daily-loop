@@ -185,8 +185,74 @@ def predict(ctx, session_date, regime_hint=""):
 
 # ─────────────────────────── 採点 ───────────────────────────
 
-def score_rows(rows, daily):
-    """満期の来た open 行を採点。データが無ければ open のまま（捏造しない）。"""
+def fetch_intraday(tickers):
+    """日中足(15分・直近60日)を ticker->DataFrame(indexはET) で返す。
+    取得不能な銘柄・失敗時は空にし、採点側で日足引けにフォールバックする（捏造しない）。"""
+    try:
+        data = yf.download(tickers, period="60d", interval="15m", progress=False,
+                           auto_adjust=False, group_by="ticker", threads=True, prepost=False)
+    except Exception:
+        return {}
+    out = {}
+    for t in tickers:
+        try:
+            df = data[t] if isinstance(data.columns, pd.MultiIndex) else data
+            df = df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
+            if len(df) == 0:
+                continue
+            idx = df.index
+            if idx.tz is None:
+                idx = idx.tz_localize("UTC")
+            df.index = idx.tz_convert(ET)
+            out[t] = df
+        except Exception:
+            continue
+    return out
+
+
+def managed_exit_1d(intr, session_date, direction, entry, target_pct, stop_pct):
+    """1d建玉を当日の日中足で管理決済（stop/target 先着、無ければ引け）。
+    戻り値 (ret_pct, exit_price, reason)。ret_pct は方向調整済み（プラス=順行）。
+    日中足が無ければ None（採点側で日足引けにフォールバック）。
+    同一足で stop/target 両接触は、保守的に stop 優先。"""
+    if intr is None:
+        return None
+    try:
+        day = intr[[d.date() == session_date for d in intr.index]]
+        day = day.between_time("09:30", "16:00")
+    except Exception:
+        return None
+    if len(day) == 0:
+        return None
+    tp = abs(target_pct) / 100.0       # 例 +1.2 -> 0.012
+    sp = -abs(stop_pct) / 100.0        # 例 -0.8 -> -0.008（必ず負）
+    if direction == "up":
+        target = entry * (1 + tp)      # 上の利確
+        stop = entry * (1 + sp)        # 下の損切り
+        for _, b in day.iterrows():
+            if float(b["Low"]) <= stop:
+                return (sp * 100.0, stop, "stop")
+            if float(b["High"]) >= target:
+                return (tp * 100.0, target, "target")
+    else:                              # down（ショート）
+        target = entry * (1 - tp)      # 下の利確
+        stop = entry * (1 - sp)        # 上の損切り（sp<0 なので entry より上）
+        for _, b in day.iterrows():
+            if float(b["High"]) >= stop:
+                return (sp * 100.0, stop, "stop")
+            if float(b["Low"]) <= target:
+                return (tp * 100.0, target, "target")
+    # どちらも触れず → 引け
+    close = float(day["Close"].iloc[-1])
+    raw = (close - entry) / entry * 100.0
+    ret = raw if direction == "up" else -raw
+    return (ret, close, "引け")
+
+
+def score_rows(rows, daily, intraday):
+    """満期の来た open 行を採点。1dは日中足で stop/target を執行（無ければ日足引けにフォールバック）、
+    3dは日足の3営業日目引け（従来通り。※新規3dは flat のため実際には対象外）。
+    データが無ければ open のまま（捏造しない）。"""
     scored = 0
     for r in rows:
         if r["status"] != "open" or r["direction"] not in ("up", "down"):
@@ -204,13 +270,36 @@ def score_rows(rows, daily):
         i = list(df.index).index(sd)
         entry = float(df["Open"].iloc[i])
 
-        need = 0 if r["horizon"] == "1d" else 2   # 1d=当日引け / 3d=3営業日目の引け
-        if i + need >= len(df):
-            continue                      # まだ満期が来ていない
-        exitp = float(df["Close"].iloc[i + need])
+        if r["horizon"] == "1d":
+            try:
+                tp = float(str(r.get("target_pct", "")).replace("+", "") or 1.2)
+            except (ValueError, TypeError):
+                tp = 1.2
+            try:
+                sp = float(str(r.get("stop_pct", "")).replace("+", "") or -0.8)
+            except (ValueError, TypeError):
+                sp = -0.8
+            res = None
+            try:
+                res = managed_exit_1d(intraday.get(r["ticker"]), sd,
+                                      r["direction"], entry, tp, sp)
+            except Exception:
+                res = None
+            if res is not None:
+                ret, exitp, reason = res
+            else:                         # フォールバック: 日足の当日引け
+                exitp = float(df["Close"].iloc[i])
+                raw = (exitp - entry) / entry * 100.0
+                ret = raw if r["direction"] == "up" else -raw
+                reason = "引け(日足)"
+        else:                             # 3d = 3営業日目の引け（従来通り）
+            if i + 2 >= len(df):
+                continue                  # まだ満期が来ていない
+            exitp = float(df["Close"].iloc[i + 2])
+            raw = (exitp - entry) / entry * 100.0
+            ret = raw if r["direction"] == "up" else -raw
+            reason = "3営業日目の引け"
 
-        raw = (exitp - entry) / entry * 100.0
-        ret = raw if r["direction"] == "up" else -raw
         net = cost_net(ret)
         r["actual_open"] = f"{entry:.2f}"
         r["actual_close"] = f"{exitp:.2f}"
@@ -218,8 +307,7 @@ def score_rows(rows, daily):
         r["net_return_pct"] = f"{net:+.2f}"
         r["hit"] = "TRUE" if ret > 0 else "FALSE"
         r["status"] = "closed"
-        r["exit_reason"] = ("引け" if r["horizon"] == "1d" else "3営業日目の引け") + \
-                           ("(コスト負け)" if (ret > 0 and net < 0) else "")
+        r["exit_reason"] = reason + ("(コスト負け)" if (ret > 0 and net < 0) else "")
         scored += 1
     return scored
 
@@ -260,13 +348,15 @@ def main():
     wl = load_watchlist()
     tickers = [t for t, _ in wl]
     daily = fetch_daily(tickers)
-    print(f"[llm_loop] 日足取得 {len(daily)}/{len(tickers)} 銘柄")
+    intraday = fetch_intraday(tickers)
+    print(f"[llm_loop] 日足取得 {len(daily)}/{len(tickers)} 銘柄 / "
+          f"日中足取得 {len(intraday)}/{len(tickers)} 銘柄")
 
     rows = read_log()
     seen = {r["pred_id"] for r in rows}
 
     # ── 採点（先に実行）──
-    n_scored = score_rows(rows, daily)
+    n_scored = score_rows(rows, daily, intraday)
 
     # ── 予測（平日 かつ 寄り付き前 のみ）──
     n_new = 0
@@ -293,12 +383,14 @@ def main():
                 pid = f"{session}-{t}-{h}"
                 if pid in seen:
                     continue
+                # 3d は「賭け」から外す（測定用に lean/score は残すが direction=flat）
+                row_dir = direction if h == "1d" else "flat"
                 rows.append({
                     "pred_id": pid,
                     "predict_date_jst": now.astimezone(JST).strftime("%Y-%m-%d %H:%M"),
                     "session_date": session, "market": "US", "ticker": t,
                     "corr_bucket": bucket_of.get(t, ""), "strategy_tag": "llm_catalyst",
-                    "lean": lean, "score": f"{score:.2f}", "direction": direction,
+                    "lean": lean, "score": f"{score:.2f}", "direction": row_dir,
                     "entry_ref": "session_open", "target_pct": "+1.2", "stop_pct": "-0.8",
                     "horizon": h, "confidence": conf,
                     "catalyst_type": p.get("catalyst_type", ""), "regime": "",
